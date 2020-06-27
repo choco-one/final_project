@@ -1,0 +1,5 @@
+https://projects.apache.org/projects.html?category#cloud
+https://projects.apache.org/projects.html?category#xml
+http://hbase.apache.org
+https://projects.apache.org/projects.html?category#search
+http://wicket.apache.org
