@@ -8,8 +8,8 @@ import math
 import numpy
 import operator
 from bs4 import BeautifulSoup
+from flask import Flask, request
 from elasticsearch import Elasticsearch
-from flask_restful import Resource
 from nltk.tokenize import word_tokenize
 
 # 입력방법 2가지 -> 단일 url 입력(유사도 분석 X, 단어 분석은 가능?), 다중 url 텍스트파일 입력(유사도 분석 O)
@@ -25,8 +25,7 @@ sent_list_2 = []
 
 
 def cleansing(text):  # 특수문자 제거 함수
-    cleaned_text = re.sub('[-=+©,#/\?:;\{\}^$.@—{*\"※;»~&}%ㆍ!』\\‘|\(\)\[\]\<\>`\'…》]', '', text).replace("’",
-                                                                                                         "").split()
+    cleaned_text = re.sub('[-=+©,#/\?:;\{\}^$.@—{*\"※;»~&}%ㆍ!』\\‘|\(\)\[\]\<\>`\'…》]', '', text).replace("’", "").split()
     return cleaned_text
 
 
@@ -97,45 +96,66 @@ def compute_idf():
     return idf_d
 
 
-class UrlReceived(Resource):  # 단일 url 입력시
-    def post(self, input_url):
-        url = input_url
-        url = url.replace("\n", "")
+app = Flask(__name__)
+
+
+@app.route('/', methods=['GET'])
+def homepage():
+    upload = "<form action = \"/file_status\" method = \"post\" enctype =\"multipart/form-data\"><input type = " \
+             "\"file\" name = \"file\" /><input type = \"submit\" /></form> "
+
+    return "<!DOCTYPE html><html lang=\"en\"><head><meta charset=\"UTF-8\"><title>Home</title></head><body><form " \
+           "action=\"/url_status\" method=\"post\"><p>Input URL<input type=\"text\" name=\"URL\"></p><input " \
+           "type=\"submit\" value=\"Analyze\"></form><p>" + upload + "</p></body></html> "
+
+
+@app.route('/url_status', methods=['POST'])
+def url_status():
+    if request.method == "POST":
+        url = []
+        url.append(request.form['URL'])
+        url[0] = url[0].replace("\n", "")
         start_time = []
         stop_time = []
         result_time = []
+        dictionary = {}
+        status = ""
         tmp = 0
         try:
-            res = requests.get(url)
+            res = requests.get(url[0])
+            start_time.append(timeit.default_timer())
+            html = BeautifulSoup(res.content, "html.parser")
+            html_body = html.find_all('div')
+            for string in html_body:
+                word = str(string.text)
+                word = cleansing(word)
+                for element in word:
+                    if element in dictionary.keys():  # 총 단어수 tmp (중복 허용)/ 단어 리스트는 중복 없이
+                        dictionary[element] += 1
+                        tmp += 1
+                    else:
+                        dictionary[element] = 1
+                        tmp += 1
+            word_doc = []  # 딕셔너리에서 리스트로 단어 옮기기
+            for key in dictionary:
+                word_doc.append(cleansing(key))
+            stop_time.append(timeit.default_timer())
+            result_time.append(stop_time[0] - start_time[0])  # 총 소요시간 result_time[0]
+            status = "성공"
         except:
-            print("Can not open this URL")
-        start_time.append(timeit.default_timer())
-        html = BeautifulSoup(res.content, "html.parser")
-        html_body = html.find_all('div')
-        dictionary = {}
-        for string in html_body:
-            word = str(string.text)
-            word = cleansing(word)
-            for element in word:
-                if element in dictionary.keys():  # 총 단어수 tmp (중복 허용)/ 단어 리스트는 중복 없이
-                    dictionary[element] += 1
-                    tmp += 1
-                else:
-                    dictionary[element] = 1
-                    tmp += 1
-        word_doc = []  # 딕셔너리에서 리스트로 단어 옮기기
-        for key in dictionary:
-            word_doc.append(cleansing(key))
-        stop_time.append(timeit.default_timer())
-        result_time.append(stop_time[0] - start_time[0])  # 총 소요시간 result_time[0]
-        result = [str(tmp), str(result_time[0]), url]  # [0]중복없는 단어 리스트, [1]총 단어수(중복X), [2]소요시간, [3]url
-        print(result)
-        return result
+            status = "실패"
+            tmp = 0
+            result_time.append("-")
+
+        e = ""
+        e = e + "<tr><td>" + url[0] + "</td><td>" + status + "</td><td>" + str(tmp) + "</td><td>" + str(result_time[0]) + "</td></tr>"
+
+        return "<!DOCTYPE html><html lang=\"en\"><head><meta charset=\"UTF-8\"><title>Status text Box</title></head><body><p>Status Text Box</p><table border=1 style=\"border: 1px solid black; text-align:center;\"><th>URL</th><th>Status</th><th>Word Num</th><th>Time</th>" + e + "</table><p><a href=\"/\" target=\"\"><input type =\"submit\" value = \"Go Home\"></a></form></p></body></html>"
 
 
-class FileReceived(Resource):  # 다중 url 텍스트 입력 (url_txt : 파일 이름)
-    def post(self, url_txt):
-        # print(1)
+@app.route('/file_status', methods=['POST'])
+def file_status():
+    if request.method == "POST":
         whole_word_info = []  # 각 url 총단어 저장
         url = []  # 각 url 저장
         status = []  # 크롤링 성공여부 저장
@@ -146,12 +166,13 @@ class FileReceived(Resource):  # 다중 url 텍스트 입력 (url_txt : 파일 �
         overlap_url = []  # url 중복 체크리스트
         url_index = 0
         try:
-            f = open(url_txt, 'r')
+            f = request.files['file']
             url_lines = f.readlines()
             f.close()
         except:  # 파일읽기 시 오류처리
             print("File Read Error!")
         for i in url_lines:
+            i = i.decode('utf-8')
             url.append(i)
             url[url_index] = url[url_index].replace("\n", "")
             try:
@@ -212,119 +233,114 @@ class FileReceived(Resource):  # 다중 url 텍스트 입력 (url_txt : 파일 �
                         index[j] = 1
         for k in range(0, url_index):
             if index[k] == 1:
-                url.pop(k)
-                status.pop(k)
-                overlap_url.pop(k)
-                result_time.pop(k)
-                whole_word_info.pop(k)
-                word_num.pop(k)
+                url.pop(k-b)
+                status.pop(k-b)
+                overlap_url.pop(k-b)
+                result_time.pop(k-b)
+                whole_word_info.pop(k-b)
+                word_num.pop(k-b)
                 b += 1
-        url_index -= b
-        result = [url, overlap_url, status, result_time, whole_word_info, word_num]
-        # url, 중복여부, 크롤링성공여부, 소요시간, 각 url 마다의 단어, 각 url 마다의 단어수
-        return result
+                url_index -= 1
+        status_result = ""
+        for i in range(0, url_index):
+            status_result = status_result + "<tr><td>" + url[i] + "</td><td>" + status[i] + "</td><td>" + str(word_num[i]) + "</td><td>" + overlap_url[i] + "</td><td>" + str(result_time[i]) + "</td></tr>"
+        save2(whole_word_info, word_num, status, result_time, url)  # input data in elastic search
+
+        return "<!DOCTYPE html><html lang=\"en\"><head><meta charset=\"UTF-8\"><title>Status text " \
+               "Box</title></head><body><p>Status Text Box</p><table border=1 style=\"border: 1px solid black; " \
+               "text-align:center;\"><th>URL</th><th>Status</th><th>Word Num</th><th>중복 여부</th><th>Time</th>" + \
+               status_result + "</table><p><a href=\"/tf_idf\" target=\"_blank\"><input type=\"submit\" " \
+                               "value=\"TF-IDF\"></a></p><p><a href=\"/cosine\" target=\"_blank\"><input " \
+                               "type=\"submit\" value=\"Cosine-Similarity\"></a></p><p><a href=\"/\" " \
+                               "target=\"\"><input type =\"submit\" value = \"Go Home\"></a></form></p></body></html> "
 
 
-class WordAnalysis(Resource):  # tf-idf 단어 top 10
-    def post(self):
-        global es
-        global sent_list_2
-        es.list = []
-        es_list = es.search(index='multi')
-        # print(2)
-        n = 0
-        words = []
-        url = []
-        tf_idf_word = []
-        result_word = []
-        for i in es_list['hits']['hits']:
-            words.append(i['_source']['word'])
-            url.append(i['_source']['url'])
-            n += 1
-        if n < 2:
-            return "Need More Documents"
-        sentence = []
-        for i in range(0, n):
-            sentence.append("")
-        for i in range(0, n):
-            for j in words[i]:
-                sentence[i] += j + " "
-        for i in range(0, n):
-            process_new_sentence_2(sentence[i])
-        idf_d = compute_idf()
-        for i in range(0, len(sent_list_2)):
-            tf_d = compute_tf(sent_list_2[i])
-        dic = {}
-        for word, tf_val in tf_d.items():
-            dic[word] = tf_val * idf_d[word]
-        dic = sorted(dic.items(), key=operator.itemgetter(1, 0), reverse=True)
-        for i in range(0, 10):
-            result_word.append(dic[i][0])
-            tf_idf_word.append(dic[i][1])
-        result = [result_word, tf_idf_word]  # top10 단어와 유사도 (리스트 10개씩) 리턴
-        print(result)
-        return result
-
-
-class SimAnalysis(Resource):  # cosine 유사성 분석시
-    def post(self):
-        global es
-        es.list = []
-        es_list = es.search(index='multi')
-        n = 0
-        words = []
-        url = []
-        key = []
-        value = []
-        for i in es_list['hits']['hits']:
-            words.append(i['_source']['word'])
-            url.append(i['_source']['url'])
-            n += 1
-        if n < 2:
-            return "Need More Documents"
-        sentence = []
-        for i in range(0, n):
-            sentence.append("")
-        for i in range(0, n):
-            for j in words[i]:
-                sentence[i] += j + " "
-        for i in range(0, n):
-            process_new_sentence_1(sentence[i])
-        dotpro = {}
-        cos_simil = {}
-        for i in range(0, n):
-            for j in range(i + 1, n):
-                v_1 = make_vector(i)
-                v_2 = make_vector(j)
-                index = str(i) + '-' + str(j)
-                dotpro[index] = numpy.dot(v_1, v_2)
-                cos_simil[index] = dotpro[index] / numpy.linalg.norm(v_1) * numpy.linalg.norm(v_2)
-        cos_simil = sorted(cos_simil.items(), key=operator.itemgetter(1, 0), reverse=True)
-        for i in range(0, 3):
-            key.append(cos_simil[i][0])
-            value.append(cos_simil[i][1])
-        result = [key, value]
-        print(result)
-        return result
-
-
-resultForSearchAPI = []
-
-
-def searchAPI():
+@app.route('/tf_idf', methods=['GET'])
+def tf_idf():
     global es
-    body = {'query': {
-        "match_all: {}"
-    }}
-    res1 = es.search(index='single', body=body)
-    res2 = es.search(index='multi', body=body)
-    # resultForSearchAPI에 전부 저장됨
-    del resultForSearchAPI[:]
-    resultForSearchAPI.append(res1)
-    resultForSearchAPI.append(res2)
+    global sent_list_2
+    es.list = []
+    es_list = es.search(index='multi')
+    n = 0
+    words = []
+    url = []
+    tf_idf_word = []
+    result_word = []
+    for i in es_list['hits']['hits']:
+        words.append(i['_source']['word'])
+        url.append(i['_source']['url'])
+        n += 1
+    if n < 2:
+        return "Need More Documents"
+    sentence = []
+    for i in range(0, n):
+        sentence.append("")
+    for i in range(0, n):
+        for j in words[i]:
+            sentence[i] += j + " "
+    for i in range(0, n):
+        process_new_sentence_2(sentence[i])
+    idf_d = compute_idf()
+    for i in range(0, len(sent_list_2)):
+        tf_d = compute_tf(sent_list_2[i])
+    dic = {}
+    for word, tf_val in tf_d.items():
+        dic[word] = tf_val * idf_d[word]
+    dic = sorted(dic.items(), key=operator.itemgetter(1, 0), reverse=True)
+    e = ""
+    for i in range(0, 10):
+        result_word.append(dic[i][0])
+        tf_idf_word.append(dic[i][1])
+        e = e + "<tr><td>"+str(result_word[i])+"</td><td>"+str(tf_idf_word[i])+"</td></tr>"
+    return "<!DOCTYPE html><html lang=\"en\"><head><meta charset=\"UTF-8\"><title>TF-IDF " \
+           "Top10</title></head><body><p>TF-IDF Top10</p><table border=1 style=\"border: 1px solid black; " \
+           "text-align:center;\"><th>Word</th><th>TF-IDF</th>" + e + "</table></body></html> "
 
 
-# res의 저장을 단일과 중복url을 분리할까 말까 고민하고 있다.
+@app.route('/cosine',methods=['GET'])
+def cosine():
+    global es
+    es.list = []
+    es_list = es.search(index='multi')
+    n = 0
+    words = []
+    url = []
+    for i in es_list['hits']['hits']:
+        words.append(i['_source']['word'])
+        url.append(i['_source']['url'])
+        n += 1
+    if n < 2:
+        return "Need More Documents"
+    sentence = []
+    for i in range(0, n):
+        sentence.append("")
+    for i in range(0, n):
+        for j in words[i]:
+            sentence[i] += j + " "
+    for i in range(0, n):
+        process_new_sentence_1(sentence[i])
+    dotpro = {}
+    cos_simil = {}
+    for i in range(0, n):
+        for j in range(i + 1, n):
+            v_1 = make_vector(i)
+            v_2 = make_vector(j)
+            index = str(i) + '-' + str(j)
+            dotpro[index] = numpy.dot(v_1, v_2)
+            cos_simil[index] = dotpro[index] / numpy.linalg.norm(v_1) * numpy.linalg.norm(v_2)
+    cos_simil = sorted(cos_simil.items(), key=operator.itemgetter(1, 0), reverse=True)
+    e = ""
+    for i in range(0, 3):
+        key = str(cos_simil[i][0])
+        value = str(cos_simil[i][1])
+        keys = key.split('-')
+        url_to_url = "[ " + url[int(keys[0])] + " ] - [ " + url[int(keys[1])] + " ]"
+        e = e + "<tr><td>" + str(i + 1) + "</td><td>" + url_to_url + "</td><td>" + str(value) + "</td></tr>"
+    return "<!DOCTYPE html><html lang=\"en\"><head><meta charset=\"UTF-8\"><title>Cosine-Similarlity " \
+           "Top3</title></head><body><p>Cosine-Similarlity Top3</p><table border=1 style=\"border: 1px solid black; " \
+           "text-align:center;\"><th>Rank</th><th>URL</th><th>Cosine-Similarlity</th>" + e + "</table></body></html> "
+
+
 result1 = []  # result1에는 elasticsearch가
 result1_1 = []  # 실제 삽입값이 저장된다
 result2 = []
@@ -375,31 +391,6 @@ def save2(word, frequency, success, time, url):
         url_id += 1
 
 
-# URL이 있으면 TRUE로 없다면 Flase
-def isthereurl():
-    if url_id > 1:
-        return True
-    if _id > 1:
-        return True
-    else:
-        return False
-
-
 if __name__ == '__main__':
     es = Elasticsearch([{'host': "127.0.0.1", 'port': "9200"}], timeout=30)
-    # 예시
-    res_craw_url = UrlReceived().post("http://wicket.apache.org\n")       # url이름 입력
-    save1(res_craw_url[0], res_craw_url[1], res_craw_url[2])
-    result_crawling_url = FileReceived().post("url.txt")                   # 파일이름 입력
-    save2(result_crawling_url[4], result_crawling_url[5], result_crawling_url[2], result_crawling_url[3],
-          result_crawling_url[0])
-
-    # tf-idf 단어 top 10
-    word_sim_result = WordAnalysis().post()
-    word_sim_word = word_sim_result[0]  # word 와 figure에 10개씩의 인덱스 존재
-    word_sim_figure = word_sim_result[1]
-
-    # cosine 유사도 분석
-    cos_sim_result = SimAnalysis().post()  # url 과 figure에 3개씩의 인덱스 존재
-    cos_sim_url = cos_sim_result[0]
-    cos_sim_figure = cos_sim_result[1]
+    app.run()
